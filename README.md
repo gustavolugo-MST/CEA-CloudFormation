@@ -65,18 +65,6 @@ By building this, I learned:
 
 ---
 
-## Next Level Ideas
-
-Want to expand this?
-
-- Add parameters so the bucket name isn't hardcoded
-- Add outputs to reference the bucket in other stacks
-- Extend the template with IAM roles or bucket policies
-- Convert to AWS CDK for a programmatic alternative to raw YAML
-- Add a CI/CD pipeline to deploy on push
-
----
-
 ## Built By
 
 **Gustavo Lugo** | Cloud Engineering Student | Cloud Engineer Academy
