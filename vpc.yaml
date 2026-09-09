@@ -119,6 +119,86 @@ Resources:
     Properties:
       SubnetId: !Ref PublicSubnet2B 
       RouteTableId: !Ref PublicRouteTable 
+# Bastion Host EC2
+  BastionHost: 
+    Type: 'AWS::EC2::Instance'
+    Properties: 
+      InstanceType: t3.micro
+      KeyName: bastion 
+      ImageId: ami-09a7bdac3256b2102
+      SubnetId: !Ref PublicSubnet2B
+      SecurityGroupIds:
+        - !Ref BastionSG
+      Tags:
+        - Key: Name
+          Value: BastionHost
+# Bastion Security Group
+  BastionSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties: 
+      GroupDescription: 'Enable SSH access'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 23.164.40.137/32
+#AppInstance1A
+  AppInstance1A:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t3.micro
+      KeyName: bastion
+      ImageId: ami-09a7bdac3256b2102
+      SubnetId: !Ref AppPrivateSubnet1A
+      SecurityGroupIds:
+        - !Ref AppInstance1ASG
+      Tags:
+        - Key: Name
+          Value: App1 
+#AppInstance2B
+  AppInstance2B:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: t3.micro
+      KeyName: bastion
+      ImageId: ami-09a7bdac3256b2102
+      SubnetId: !Ref AppPrivateSubnet2B
+      SecurityGroupIds:
+        - !Ref AppInstance2BSG
+      Tags:
+        - Key: Name
+          Value: App2 
+#SG App 1A
+  AppInstance1ASG: 
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow SSH from Bastion'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSG
+#SG App 2B
+  AppInstance2BSG: 
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow ICMP Ping from App1'
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: icmp 
+          FromPort: -1
+          ToPort: -1
+          SourceSecurityGroupId: !Ref AppInstance1ASG
+
+
+
+
+
+
+
+
 
 
 
