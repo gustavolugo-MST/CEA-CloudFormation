@@ -1,6 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'CloudFormation for VPC'
 
+Parameters:
+  MyIpAddress:
+    Type: String
+    Description: Your current public IP address for SSH access to the bastion
+
 Resources:
 # My VPC
   MyVPC:
@@ -142,7 +147,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 23.164.40.137/32
+          CidrIp: !Ref MyIpAddress
 #AppInstance1A
   AppInstance1A:
     Type: 'AWS::EC2::Instance'
