@@ -34,11 +34,15 @@ This project defines an S3 bucket entirely in a YAML template, and lets AWS Clou
 
 ### How to Run
 
-    aws cloudformation create-stack --stack-name my-s3-bucket-stack --template-body file://S3-Bucket.yaml
+```
+aws cloudformation create-stack --stack-name my-s3-bucket-stack --template-body file://S3-Bucket.yaml
+```
 
 Then check deployment status:
 
-    aws cloudformation describe-stacks --stack-name my-s3-bucket-stack --query "Stacks[0].StackStatus"
+```
+aws cloudformation describe-stacks --stack-name my-s3-bucket-stack --query "Stacks[0].StackStatus"
+```
 
 ### Debugging Journey
 
@@ -89,15 +93,21 @@ A single CloudFormation template that builds a custom VPC, splits it into six su
 
 Deploy for the first time:
 
-    aws cloudformation create-stack --stack-name vpc-stack --template-body file://vpc.yaml
+```
+aws cloudformation create-stack --stack-name vpc-stack --template-body file://vpc.yaml
+```
 
 Push new changes into the existing stack (without deleting and rebuilding it):
 
-    aws cloudformation update-stack --stack-name vpc-stack --template-body file://vpc.yaml
+```
+aws cloudformation update-stack --stack-name vpc-stack --template-body file://vpc.yaml
+```
 
 Check status:
 
-    aws cloudformation describe-stacks --stack-name vpc-stack
+```
+aws cloudformation describe-stacks --stack-name vpc-stack
+```
 
 ### Debugging Journey
 
@@ -121,6 +131,73 @@ This template involved more subtle bugs than the S3 project, structural and refe
 - Why `update-stack` exists as its own command: it changes only what's different, without touching resources that don't need to change
 - What "drift" means, and why deleting resources outside of CloudFormation causes CloudFormation's tracked state to disagree with what's actually in AWS
 - How to read YAML indentation structurally, not just visually. Two keys at the same indentation level are siblings, not parent/child, even if that's not what was intended
+
+---
+
+## Project 3: Bastion Host, Private App Instances, and a Real Security Incident
+
+Extends the same VPC from Project 2 with a bastion host pattern: a public-facing jump box, two private application instances reachable only through it, and security groups that model real network segmentation instead of one flat network.
+
+### What It Does
+
+- Deploys a `BastionHost` EC2 instance in a public subnet, reachable via SSH from one specific IP
+- Deploys two private application instances (`App1`, `App2`) in separate Availability Zones, with no public IP at all
+- Chains security groups so `App1` accepts SSH only from the bastion, and `App2` accepts ICMP (ping) only from `App1`
+- Uses a CloudFormation Parameter for the bastion's allowed SSH source IP, so the template itself never contains a real IP address
+- (Real incident) Detected, contained, and fully remediated a leaked SSH private key that was accidentally committed to a public GitHub repo
+
+### CloudFormation & AWS Fundamentals Demonstrated
+
+| Concept | How It's Used |
+|---|---|
+| Bastion Host Pattern | One public jump box (`BastionHost`) is the only entry point into private subnets |
+| Security Group Chaining | `SourceSecurityGroupId` (not a CIDR) lets one security group reference another, so only traffic from a specific instance's SG is allowed |
+| Least-Privilege Network Design | `App1`'s SG allows SSH only from `BastionSG`; `App2`'s SG allows ICMP only from `App1`'s SG, nothing else, from nowhere else |
+| CloudFormation Parameters | `MyIpAddress` parameter removes a personal IP from the template entirely; supplied at deploy time via `--parameters` instead |
+| EC2 Key Pairs | Key pairs are created outside CloudFormation (console/CLI) and referenced by name only, `!Ref` doesn't apply to resources that don't exist in the template |
+| Resource Replacement | Some properties (like `KeyName`) can't be updated in place, changing them requires CloudFormation to terminate and relaunch the instance |
+| Git History Rewriting | `git filter-repo` permanently removes a committed secret from every commit, not just the latest one |
+
+### How to Run
+
+```
+aws cloudformation create-stack --stack-name vpc-stack --template-body file://vpc.yaml --parameters ParameterKey=MyIpAddress,ParameterValue=YOUR_CURRENT_IP/32
+```
+
+Update after any change, including after your IP rotates:
+
+```
+aws cloudformation update-stack --stack-name vpc-stack --template-body file://vpc.yaml --parameters ParameterKey=MyIpAddress,ParameterValue=YOUR_CURRENT_IP/32
+```
+
+Since `MyIpAddress` has no default value, CloudFormation refuses to deploy without it, on purpose.
+
+### The Security Incident
+
+While copying an EC2 key pair (`bastion.pem`) into the project folder for SSH access, it got swept up in a `git add .` and pushed to this public repo. Once caught:
+
+1. **Assessed real exposure before panicking** — the bastion's security group only allowed SSH from one specific IP, and the instance had no IAM role attached, so the leaked key alone didn't hand out broad access.
+2. **Rewrote git history** with `git filter-repo --path bastion.pem --invert-paths --force` to remove the file from every commit, not just delete it going forward, then force-pushed the cleaned history.
+3. **Added a `.gitignore`** (`*.pem`) so this class of mistake can't repeat.
+4. **Rotated the credential for real** — deleted the compromised key pair in AWS, created a new one, and ran a full `delete-stack` / `create-stack` to force every instance to relaunch with the new key, since the old public key was already baked into `authorized_keys` on the running instances and a name-only key rotation wouldn't have removed it.
+5. **Hardened the template** so this couldn't happen the same way again — the personal IP that had also been committed became a `Parameter` instead of a hardcoded value.
+
+### Debugging Journey
+
+1. **Wrong resource `Type`** — `AppInstance1A`/`AppInstance2B` (actual EC2 instances) were briefly typed as `AWS::EC2::SecurityGroup`, a copy-paste artifact confirmed by independently spotting the instructor hit the identical bug.
+2. **Invalid `!Ref` on a non-resource** — `KeyName: !Ref bastion` failed with "Unresolved resource dependencies," because the key pair was created outside CloudFormation and isn't a logical resource `!Ref` can resolve. Fixed with the plain string `bastion` instead.
+3. **Free-tier instance type rejection** — `t2.micro` was rejected as ineligible for this account; `describe-instance-types --filters Name=free-tier-eligible,Values=true` surfaced `t3.micro` as a valid replacement.
+4. **SSH timeout with no error at all** — `ssh` hung and eventually timed out with zero response, no host-key prompt, nothing. Root cause: a security group silently drops non-matching traffic instead of rejecting it, and a home ISP's dynamic IP had rotated since the security group was last deployed. Diagnosed by comparing `curl -4 ifconfig.me` against the CIDR in the template.
+5. **Broken YAML nesting (again)** — two security group resources were indented one level too deep, nesting them as properties of another resource instead of siblings under `Resources:`.
+
+### Learning Outcomes
+
+- How a bastion host pattern actually restricts access at the security-group level, using `SourceSecurityGroupId` instead of open CIDR ranges
+- Why leaked credentials need to be evaluated for real blast radius (security group scope, attached IAM roles) rather than reacting with blanket panic or blanket dismissal
+- That deleting a secret from a repo's latest commit does nothing on its own, `git filter-repo` (or equivalent) is required to remove it from history entirely
+- Why some CloudFormation properties force full resource replacement instead of updating in place, and how to reason about which ones do
+- How to move a value that shouldn't be hardcoded (a personal IP) into a `Parameter`, the same principle behind not hardcoding secrets in application code
+- That a security group silently dropping traffic (timeout) and actively rejecting it (immediate refusal) are different failure signatures worth telling apart when debugging
 
 ---
 
