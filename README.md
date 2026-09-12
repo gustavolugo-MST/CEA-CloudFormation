@@ -201,6 +201,49 @@ While copying an EC2 key pair (`bastion.pem`) into the project folder for SSH ac
 
 ---
 
+## Project 4: IAM Users, Groups, Roles, and Policies
+
+A standalone CloudFormation template that models a small IAM setup: a user, a group, an EC2-assumable role, and a custom inline policy, covering both AWS-managed and self-authored permissions in the same file.
+
+### What It Does
+
+- Creates an IAM User (`GustavoCFN`) and IAM Group (`GustavosGroup`), and adds the user to the group via its own resource
+- Creates an IAM Role (`MyIAMRole`) for EC2, with a trust policy allowing only EC2 instances to assume it
+- Creates a custom inline IAM Policy granting `s3:GetObject`, attached directly to the role
+- Attaches both AWS-managed policies (`AdministratorAccess`, `PowerUserAccess`) and a custom-authored policy side by side, to compare the two approaches directly
+
+### CloudFormation & AWS Fundamentals Demonstrated
+
+| Concept | How It's Used |
+|---|---|
+| IAM User / Group / Role | `AWS::IAM::User`, `AWS::IAM::Group`, `AWS::IAM::Role` |
+| Group Membership | `AWS::IAM::UserToGroupAddition` attaches a user to a group as its own resource, not a property of either |
+| Trust Policies vs. Permission Policies | `AssumeRolePolicyDocument` controls *who* can assume a role; `ManagedPolicyArns` / inline `Policies` control *what* it can do once assumed |
+| Managed vs. Inline Policies | `ManagedPolicyArns` references existing, reusable AWS policies by ARN; `AWS::IAM::Policy` defines a custom, one-off policy directly in the template |
+| IAM Policy Document Structure | `Version`, `Statement`, `Effect`, `Action`, `Resource`, `Principal` are fixed IAM policy-language fields, not user-chosen names |
+| YAML Flow vs. Block Style | `['ec2.amazonaws.com']` and an equivalent dashed list produce identical data, two ways to write the same list |
+
+### Debugging Journey
+
+1. **Empty file deploy** — `Invalid length for parameter TemplateBody, value: 0`, the file had unsaved editor changes that hadn't been written to disk, the same class of bug from the very first S3 exercise.
+2. **Broken command syntax** — wrote `--create-stack iam-stack` instead of `create-stack --stack-name iam-stack`; `create-stack` is a subcommand, not a flag.
+3. **Broken nesting in the trust policy** — `Service` was a sibling of `Principal` instead of nested inside it; a follow-up fix then accidentally pulled `Action` in as a child of `Principal` too, instead of leaving it a sibling.
+4. **Stray unmatched quote** — `sts:AssumeRole'` had a trailing apostrophe with no opening match, which would have been sent to AWS as a literal, invalid action name.
+5. **A whole resource defined outside `Resources:`** — `MyIAMPolicy` was written at zero indentation, making it a sibling of `Resources:` itself instead of a resource inside it, the most severe of the nesting bugs.
+6. **`PolicyDocument` written as a single malformed line** — needed `Version` and `Statement` nested inside it as their own block, not a flat string.
+7. **Misplaced property** — `Roles` was nested inside an individual `Statement` entry instead of at the policy resource's top level, where it actually belongs.
+8. **Typo** — `S3:GrtObject` instead of `S3:GetObject`, an invalid IAM action name.
+
+### Learning Outcomes
+
+- The difference between a resource's logical ID (freely chosen, never documented) and its `Type` value (fixed, AWS-defined, and what actually has a documentation page), and by extension, the difference between property *names* (always fixed) and property *values* (sometimes free-form, sometimes a fixed enum, sometimes a literal constant like `Version: '2012-10-17'`)
+- Trust policies and permission policies answer two different questions entirely: *who can become this role* versus *what can this role do*
+- Why IAM roles issue temporary, auto-rotating credentials instead of permanent ones, unlike a long-lived credential such as an IAM user's access key or an EC2 key pair
+- How to find AWS's official documentation for a resource by searching its `Type` value, since the logical ID is never documented anywhere
+- That YAML's bracket (flow-style) and dash (block-style) list syntaxes are functionally identical, just different formatting for the same underlying data
+
+---
+
 ## Built By
 
 **Gustavo Lugo** | Cloud Engineering Student | Cloud Engineer Academy
