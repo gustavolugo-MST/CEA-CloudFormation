@@ -319,6 +319,55 @@ aws cloudformation describe-stack-resource --stack-name asg-stack --logical-reso
 - That compute-backed stacks (ALB, EC2, ASG) bill continuously and are worth tearing down once reviewed, unlike IAM-only stacks which cost nothing to leave running
 ---
  
+## Project 7: S3 Static Website Hosting
+ 
+A standalone S3 bucket configured to serve a static HTML page directly, with a bucket policy granting public read access, no EC2, no load balancer, just the bucket itself as the web server.
+ 
+### What It Does
+ 
+- Creates an S3 bucket (`MyS3Bucket`) with `WebsiteConfiguration` pointing to `index.html` as the index document
+- Creates a separate `AWS::S3::BucketPolicy` resource granting public `s3:GetObject` on every object in the bucket
+- Explicitly overrides specific `PublicAccessBlockConfiguration` settings so the public policy can actually attach and take effect
+- Uploads `index.html` to the bucket as a separate step after the stack deploys, since CloudFormation provisions the bucket but doesn't move files into it
+### CloudFormation & AWS Fundamentals Demonstrated
+ 
+| Concept | How It's Used |
+|---|---|
+| Static Website Hosting | `WebsiteConfiguration` on `AWS::S3::Bucket` turns a bucket into an HTTP-servable static site, and its own distinct endpoint (`bucket.s3-website-region.amazonaws.com`) auto-resolves `IndexDocument` for bare directory paths |
+| Bucket Policies | `AWS::S3::BucketPolicy` is its own resource, referencing a bucket by `!Ref`, rather than a property on the bucket resource itself |
+| Public Access Block, Account-Level Default | As of April 28, 2023, all four `PublicAccessBlockConfiguration` settings default to blocking public access on any new bucket; a public website requires explicitly disabling the specific ones that apply |
+| BlockPublicPolicy vs. RestrictPublicBuckets | Two different jobs: one blocks a public policy from being *attached* at all, the other restricts *access* even if a public policy exists. Disabling only one isn't enough on a post-2023 account |
+| CloudFormation's Actual Scope | CloudFormation provisions the bucket and its configuration; it does not upload objects into it, `aws s3 cp` is a separate, necessary step |
+| S3 Website Endpoint vs. Object Endpoint | The same public object is reachable at two different URL styles; only the website endpoint (not the plain `s3.region.amazonaws.com` object URL) auto-resolves an index document for bare paths |
+ 
+### How to Run
+ 
+```
+aws cloudformation create-stack --stack-name s3-web-stack --template-body file://s3-static.yaml
+```
+ 
+Upload the site content separately, this doesn't happen automatically:
+ 
+```
+aws s3 cp index.html s3://<your-bucket-name>/index.html
+```
+ 
+### Debugging Journey
+ 
+1. **Whole resource defined outside `Resources:`** — `MyS3Bucket` was written at zero indentation, making it a sibling of `Resources:` itself instead of a resource inside it, the same class of bug as `MyIAMPolicy` in the IAM project.
+2. **Website inaccessible after a clean deploy (403 Forbidden)** — the bucket had `WebsiteConfiguration` and a working `BucketPolicy`, but only `RestrictPublicBuckets: false` was set under `PublicAccessBlockConfiguration`. `BlockPublicPolicy` was still defaulting to `true` (the account-level default since April 2023), which blocks a public bucket policy from attaching in the first place, not just from being read from. Adding `BlockPublicPolicy: false` alongside `RestrictPublicBuckets: false` fixed it.
+3. **Instructor-provided code had the identical gap** — confirmed the same missing setting existed in the reference template too, a reminder that course material can be technically correct when written and still be outdated against a newer AWS account default, the same lesson as the Launch Configuration deprecation, just showing up on a different resource type.
+4. **`describe-stack` vs. `describe-stacks`** — a command-name typo (missing the plural `s`), not a template issue; the CLI's own suggestion list pointed to the correct subcommand.
+5. **Non-empty bucket blocking stack deletion** — `delete-stack` would have failed with `DELETE_FAILED` since the bucket still had `index.html` in it; CloudFormation won't delete a non-empty S3 bucket. Fixed by running `aws s3 rm s3://<bucket-name> --recursive` before deleting the stack.
+### Learning Outcomes
+ 
+- That S3's Block Public Access defaults changed at the platform level in April 2023, independent of anything in a given template, the exact same category of "written correctly once, broken by a later AWS default" issue as the Launch Configuration deprecation
+- That `BlockPublicPolicy` and `RestrictPublicBuckets` solve two different problems (attaching a policy vs. honoring it) and disabling only one can look like partial success, a clean deploy followed by a 403, rather than an obvious failure
+- That authority isn't evidence, instructor-provided code hit the identical gap, and the way to resolve a disagreement about whether code is correct is to test it, not to defer to who wrote it
+- That CloudFormation's job ends at provisioning infrastructure, moving actual file content into that infrastructure is a separate, deliberate step
+- That an S3 bucket must be emptied before its stack can be deleted, the same category of "CloudFormation won't act destructively without help" as `ROLLBACK_COMPLETE` stacks needing manual deletion before redeploying
+---
+ 
 ## Built By
  
 **Gustavo Lugo** | Cloud Engineering Student | Cloud Engineer Academy
