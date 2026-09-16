@@ -368,6 +368,50 @@ aws s3 cp index.html s3://<your-bucket-name>/index.html
 - That an S3 bucket must be emptied before its stack can be deleted, the same category of "CloudFormation won't act destructively without help" as `ROLLBACK_COMPLETE` stacks needing manual deletion before redeploying
 ---
  
+## Project 8: RDS Database with Parameterized Credentials
+ 
+A standalone MySQL RDS instance, built as a first introduction to managed databases in CloudFormation, with the master username and password moved into Parameters instead of hardcoded, following the same pattern established in the bastion project.
+ 
+### What It Does
+ 
+- Provisions a single MySQL RDS instance (`MyDB`) on `db.t4g.micro`
+- Takes `DBUsername` and `DBPassword` as CloudFormation Parameters instead of hardcoding credentials into the template, with `NoEcho: true` on the password so it's masked from the console, `describe-stacks`, and stack events
+- Supplies both values at deploy time via `--parameters` on the CLI, keeping the committed template itself free of any real credential material
+### CloudFormation & AWS Fundamentals Demonstrated
+ 
+| Concept | How It's Used |
+|---|---|
+| RDS Instances | `AWS::RDS::DBInstance` with `Engine`, `EngineVersion`, `DBInstanceClass`, and `AllocatedStorage` |
+| Parameterized Credentials | `MasterUsername`/`MasterUserPassword` pull from `!Ref DBUsername`/`!Ref DBPassword` instead of literal strings, same pattern as the bastion project's `MyIpAddress` |
+| `NoEcho` | Masks a parameter's value everywhere CloudFormation would otherwise display it (console, CLI output, events); it does not hide the value from shell history if typed directly into a command |
+| Required Parameters, No Default | Neither parameter has a `Default`, so `create-stack` fails immediately and loudly if either is omitted, rather than deploying with a blank credential |
+| RDS Networking Requirements | An RDS instance needs a VPC with at least two subnets across two Availability Zones to build an implicit DB Subnet Group; it does **not** require an explicitly declared security group, it falls back to the VPC's default security group automatically if none is specified |
+| Account-Tier Service Limits | Free tier accounts cap `BackupRetentionPeriod` at 1 day; RDS enforces this at deploy time regardless of whether the template is otherwise valid |
+ 
+### How to Run
+ 
+```
+aws cloudformation create-stack --stack-name rds-stack --template-body file://rds.yaml --parameters ParameterKey=DBUsername,ParameterValue=admin ParameterKey=DBPassword,ParameterValue=YourActualPassword
+```
+ 
+### Debugging Journey
+ 
+1. **Misspelled top-level section** — `Resource:` instead of the required `Resources:`, which would have left CloudFormation seeing no resources at all in the template.
+2. **Wrong property name** — `MasterPassword` instead of the actual property `MasterUserPassword`.
+3. **Free tier backup retention limit** — `BackupRetentionPeriod: 7` failed with "exceeds the maximum available to free tier customers"; free tier caps this at 1 day, an account-level restriction rather than a template error.
+4. **No default subnets in the account** — `create-stack` failed with "No default subnet detected in VPC," because every VPC in the account, including AWS's own automatic default VPC, had been deleted during earlier cleanup. `AWS::RDS::DBInstance` needs somewhere to place its network interface, and with zero VPCs left, it had nowhere to go.
+5. **Recreating the default VPC, not just default subnets** — since the default VPC itself was gone (not just its subnets), `aws ec2 create-default-vpc` was the right tool, which rebuilds a fresh default VPC with a default subnet in every Availability Zone automatically, rather than manually recreating subnets one at a time with `create-default-subnet`.
+6. **Mistaking a stale failure for a new one** — after fixing the VPC issue, `describe-stack-events` initially showed the exact same failure again, until noticing the Request ID was byte-for-byte identical to the earlier failed attempt. The stack hadn't actually been deleted and redeployed yet, it was the same old `ROLLBACK_COMPLETE` record being read again, not a fresh test of the fix.
+7. **CLI syntax slip** — `git commit - m "..."` instead of `-m`, a space between the dash and the flag letter breaks it entirely.
+### Learning Outcomes
+ 
+- The precise reason RDS needs a VPC: to place its network interface across subnets in at least two Availability Zones, not because it strictly needs a security group explicitly declared, that part falls back to a sane default on its own
+- That AWS enforces account-tier limits (like free tier backup retention caps) at the service level when the stack actually deploys, a category of failure that has nothing to do with whether the YAML is well-formed
+- The difference between recreating a missing default *subnet* (`create-default-subnet`, when the VPC still exists) and recreating a missing default *VPC entirely* (`create-default-vpc`, when even that's gone), and why deleting "everything" during cleanup can remove infrastructure a later exercise silently depends on
+- How to tell a genuinely new failure apart from a stale one, by checking whether the Request ID in the error actually changed between attempts, rather than assuming any redeploy happened just because a command was run
+- What `NoEcho` actually protects (display surfaces) versus what it doesn't (shell history, terminal scrollback, process lists), and that authority (an instructor's own code) isn't a substitute for testing when two accounts might have different platform-level defaults
+---
+ 
 ## Built By
  
 **Gustavo Lugo** | Cloud Engineering Student | Cloud Engineer Academy
@@ -375,4 +419,3 @@ aws s3 cp index.html s3://<your-bucket-name>/index.html
 ## License
  
 Open source — feel free to fork and modify!
- 
